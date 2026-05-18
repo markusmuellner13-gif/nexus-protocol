@@ -304,4 +304,14 @@ app.get('/api/health', (_, res) =>
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`\n🚀 NEXUS Protocol server running on port ${PORT}\n`);
+
+  // Keep Render free tier awake — self-ping every 14 min so the dyno never sleeps.
+  // RENDER_EXTERNAL_URL is set automatically by Render; does nothing on other hosts.
+  if (process.env.RENDER_EXTERNAL_URL) {
+    const url = `${process.env.RENDER_EXTERNAL_URL}/api/health`;
+    setInterval(() => {
+      http.get(url, () => {}).on('error', () => {});
+    }, 14 * 60 * 1000);
+    console.log(`[keep-alive] Pinging ${url} every 14 min`);
+  }
 });
