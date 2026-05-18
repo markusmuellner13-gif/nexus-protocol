@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>NEXUS Protocol — Co-op Sci-Fi Adventure</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      background: #000;
+      overflow: hidden;
+      font-family: 'Segoe UI', Arial, sans-serif;
+    }
+    #game-container {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      width: 100%; height: 100%;
+    }
+    canvas {
+      display: block;
+      max-width: 100%;
+      max-height: 100%;
+      image-rendering: pixelated;
+    }
+    #loading {
+      position: fixed;
+      inset: 0;
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #0af;
+      font-size: 1.4rem;
+      letter-spacing: 4px;
+      text-transform: uppercase;
+      z-index: 9999;
+    }
+    #loading .bar-wrap {
+      margin-top: 28px;
+      width: 260px;
+      height: 4px;
+      background: #111;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    #loading .bar {
+      height: 100%;
+      background: linear-gradient(90deg, #0af, #0ff);
+      animation: load 2s ease-in-out forwards;
+      border-radius: 2px;
+    }
+    @keyframes load {
+      from { width: 0; }
+      to   { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div id="loading">
+    <span>NEXUS PROTOCOL</span>
+    <div class="bar-wrap"><div class="bar"></div></div>
+  </div>
+  <div id="game-container"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+  <script src="/js/game.js"></script>
+  <script src="/js/scenes.js"></script>
+  <script src="/js/gameplay.js"></script>
+</body>
+</html>
