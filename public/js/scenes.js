@@ -54,17 +54,39 @@ class MenuScene extends Phaser.Scene {
 
   _buildMenu() {
     const cx = GW/2;
+    const chNames = ['Chapter I', 'Chapter II', 'Chapter III', 'Complete'];
+    let save = null;
+    try { const raw = localStorage.getItem('nexus_save'); if(raw) save = JSON.parse(raw); } catch(e) {}
+
     const items = [
       { label:'▶  PLAY CO-OP',  fn: ()=>this.scene.start('Lobby'),    color:'#00eeff' },
       { label:'⚡  SOLO PLAY',   fn: ()=>{ GS.roomId=null; GS.playerIndex=0; this.scene.start('Cutscene',{cutscene:'intro',next:'Chapter1',solo:true}); }, color:'#aaddff' },
       { label:'📖  STORY LOG',   fn: ()=>this._showLog(),              color:'#88aacc' },
       { label:'⚙   SETTINGS',   fn: ()=>this._showSettings(),         color:'#667799' }
     ];
+
+    // Insert CONTINUE button at top if a mid-game save exists
+    if (save && save.currentChapter > 0 && save.currentChapter < 3) {
+      const chLabel = chNames[save.currentChapter] || `Chapter ${save.currentChapter+1}`;
+      items.unshift({ label:`⏩  CONTINUE  —  ${chLabel}`, fn: ()=>{
+        GS.roomId=null; GS.playerIndex=0;
+        GS.storyChoices = save.storyChoices || {};
+        GS.savedScore   = save.score || 0;
+        GS.chapter      = save.currentChapter;
+        const dest = ['Chapter1','Chapter2','Chapter3'][save.currentChapter];
+        this.scene.start(dest || 'Chapter1');
+      }, color:'#aaff88' });
+    }
+
+    const startY = save && save.currentChapter > 0 && save.currentChapter < 3
+      ? GH/2 + 10
+      : GH/2 + 30;
+
     items.forEach((item,i) => {
-      const y = GH/2+30+i*54;
-      const bg = this.add.rectangle(cx,y,280,44,0x001122,0.85).setInteractive({cursor:'pointer'});
-      this.add.rectangle(cx,y,278,42,0,0).setStrokeStyle(1,0x224466);
-      const lbl = this.add.text(cx,y,item.label,{ fontSize:'20px',fontFamily:'Arial',color:item.color,fontStyle:'bold' }).setOrigin(0.5);
+      const y = startY + i*52;
+      const bg = this.add.rectangle(cx,y,300,44,0x001122,0.85).setInteractive({cursor:'pointer'});
+      this.add.rectangle(cx,y,298,42,0,0).setStrokeStyle(1,0x224466);
+      const lbl = this.add.text(cx,y,item.label,{ fontSize:'19px',fontFamily:'Arial',color:item.color,fontStyle:'bold' }).setOrigin(0.5);
       bg.on('pointerover',()=>{ bg.setFillStyle(0x002244,0.95); lbl.setStyle({color:'#ffffff'}); SFX.ui(); this.tweens.add({targets:lbl,scaleX:1.05,scaleY:1.05,duration:80}); });
       bg.on('pointerout', ()=>{ bg.setFillStyle(0x001122,0.85); lbl.setStyle({color:item.color}); this.tweens.add({targets:lbl,scaleX:1,scaleY:1,duration:80}); });
       bg.on('pointerdown',()=>{ SFX.ui(); item.fn(); });

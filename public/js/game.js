@@ -20,7 +20,8 @@ const GS = {
   storyChoices: {},
   chapter: 0,
   saveKey: null,
-  chatMessages: []
+  chatMessages: [],
+  savedScore: 0
 };
 
 // ── Socket Manager ────────────────────────────────────────────────────────────

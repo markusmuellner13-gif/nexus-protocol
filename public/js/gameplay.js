@@ -865,11 +865,32 @@ class BaseGameScene extends Phaser.Scene {
     this.scene.start(scenes[chapterIdx]||'GameOver');
   }
 
+  _autosave(overrideChapter) {
+    try {
+      const ui = this.scene.get('UIScene');
+      const score = ui ? ui._score : 0;
+      const chapterNum = overrideChapter !== undefined
+        ? overrideChapter
+        : (parseInt(this._key.replace('Chapter','')) - 1);
+      const data = {
+        currentChapter: chapterNum,
+        score,
+        storyChoices: GS.storyChoices,
+        playerName: GS.playerData ? GS.playerData.name : 'Player',
+        savedAt: Date.now()
+      };
+      localStorage.setItem('nexus_save', JSON.stringify(data));
+      GS.savedScore = score;
+    } catch(e) { console.warn('Autosave failed:', e); }
+  }
+
   _completeChapter() {
     this._netOffs.forEach(fn=>fn());
     SFX.victory();
     this._showFloatText(this._player.x, this._player.y-40, 'CHAPTER COMPLETE!', '#ffff00');
     this.cameras.main.flash(600, 255, 255, 255);
+    const nextChapter = parseInt(this._key.replace('Chapter',''));
+    this._autosave(nextChapter);
     this.time.delayedCall(2000, ()=>{
       this.scene.stop('UIScene');
       NET.emit('game_event',{type:'chapter_complete',chapter:parseInt(this._key.replace('Chapter',''))-1});
@@ -1531,6 +1552,7 @@ class Chapter3 extends BaseGameScene {
   _doEnding(choice) {
     SFX.victory();
     this.cameras.main.flash(800,150,0,200);
+    this._autosave(3);
     this.time.delayedCall(2500,()=>{
       this._netOffs.forEach(fn=>fn());
       this.scene.stop('UIScene');

@@ -1,87 +1,61 @@
 'use strict';
 
 const express = require('express');
-const http = require('http');
+const http    = require('http');
 const { Server } = require('socket.io');
-const { v4: uuidv4 } = require('uuid');
-const fs = require('fs');
-const path = require('path');
+const path    = require('path');
 
-const app = express();
+const app    = express();
 const server = http.createServer(app);
-const io = new Server(server, {
+const io     = new Server(server, {
   cors: { origin: '*', methods: ['GET', 'POST'] },
-  pingTimeout: 60000,
-  pingInterval: 25000
+  pingTimeout:   60000,
+  pingInterval:  25000
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
-// ── Save System ─────────────────────────────────────────────────────────────
-const SAVE_FILE = path.join(__dirname, 'saves.json');
-let saveData = {};
-
-function loadSaves() {
-  try {
-    if (fs.existsSync(SAVE_FILE)) {
-      saveData = JSON.parse(fs.readFileSync(SAVE_FILE, 'utf-8'));
-    }
-  } catch (e) {
-    saveData = {};
-  }
-}
-
-function persistSaves() {
-  try {
-    fs.writeFileSync(SAVE_FILE, JSON.stringify(saveData, null, 2));
-  } catch (e) {
-    console.error('Save write failed:', e.message);
-  }
-}
-
-loadSaves();
+// ── In-memory save cache ─────────────────────────────────────────────────────
+// Saves are primarily held in the client's localStorage.
+// This cache provides a server-side backup for the current server session only.
+// Nothing is written to disk — no ephemeral-filesystem errors on any host.
+const saveCache = new Map();
 
 // ── Room Management ──────────────────────────────────────────────────────────
 class GameRoom {
   constructor(id, hostId) {
-    this.id = id;
-    this.hostId = hostId;
-    this.players = new Map();
-    this.spectators = new Set();
+    this.id        = id;
+    this.hostId    = hostId;
+    this.players   = new Map();
     this.gameState = {
-      chapter: 0,
-      started: false,
-      cutscene: null,
-      checkpoints: {},
+      chapter:      0,
+      started:      false,
+      cutscene:     null,
+      checkpoints:  {},
       storyChoices: {},
-      enemyStates: {},
+      enemyStates:  {},
       puzzleStates: {},
       collectibles: new Set()
     };
-    this.created = Date.now();
+    this.created      = Date.now();
     this.lastActivity = Date.now();
   }
 
   addPlayer(socketId, data = {}) {
     const idx = this.players.size;
     const p = {
-      id: socketId,
-      index: idx,
+      id:        socketId,
+      index:     idx,
       character: idx === 0 ? 'nova' : 'rook',
-      name: data.name || `Player ${idx + 1}`,
+      name:      data.name || `Player ${idx + 1}`,
       x: idx === 0 ? 160 : 320,
       y: 400,
-      velX: 0,
-      velY: 0,
-      hp: 100,
-      maxHp: 100,
-      state: 'idle',
+      velX: 0, velY: 0,
+      hp: 100, maxHp: 100,
+      state:  'idle',
       facing: 'right',
-      abilities: {
-        primary: { cd: 0 },
-        secondary: { cd: 0 }
-      },
+      abilities: { primary: { cd: 0 }, secondary: { cd: 0 } },
       stats: { kills: 0, deaths: 0, revives: 0 },
       ready: false
     };
@@ -90,23 +64,16 @@ class GameRoom {
     return p;
   }
 
-  removePlayer(id) {
-    this.players.delete(id);
-    this.lastActivity = Date.now();
-  }
-
-  isFull() { return this.players.size >= 2; }
-  isEmpty() { return this.players.size === 0; }
-
-  getOthers(id) {
-    return Array.from(this.players.values()).filter(p => p.id !== id);
-  }
+  removePlayer(id)  { this.players.delete(id); this.lastActivity = Date.now(); }
+  isFull()          { return this.players.size >= 2; }
+  isEmpty()         { return this.players.size === 0; }
+  getOthers(id)     { return Array.from(this.players.values()).filter(p => p.id !== id); }
 
   publicData() {
     return {
-      id: this.id,
+      id:          this.id,
       playerCount: this.players.size,
-      started: this.gameState.started,
+      started:     this.gameState.started,
       players: Array.from(this.players.values()).map(p => ({
         id: p.id, character: p.character, name: p.name, index: p.index, ready: p.ready
       }))
@@ -116,73 +83,56 @@ class GameRoom {
 
 const rooms = new Map();
 
-// Clean stale rooms every 10 minutes
+// Prune stale rooms every 10 minutes
 setInterval(() => {
   const cutoff = Date.now() - 30 * 60 * 1000;
   for (const [id, room] of rooms) {
-    if (room.lastActivity < cutoff || room.isEmpty()) {
-      rooms.delete(id);
-    }
+    if (room.lastActivity < cutoff || room.isEmpty()) rooms.delete(id);
   }
 }, 10 * 60 * 1000);
 
-// ── Socket.IO Event Handlers ─────────────────────────────────────────────────
+// ── Socket.IO ────────────────────────────────────────────────────────────────
 io.on('connection', (socket) => {
   console.log(`[+] ${socket.id.slice(0, 8)} connected`);
 
   // Create room
   socket.on('create_room', (data) => {
     const roomId = Math.random().toString(36).slice(2, 8).toUpperCase();
-    const room = new GameRoom(roomId, socket.id);
+    const room   = new GameRoom(roomId, socket.id);
     rooms.set(roomId, room);
-
     socket.join(roomId);
     socket.roomId = roomId;
-
     const player = room.addPlayer(socket.id, data);
-
-    socket.emit('room_created', {
-      roomId,
-      player,
-      playerIndex: player.index
-    });
-
+    socket.emit('room_created', { roomId, player, playerIndex: player.index });
     console.log(`[R] Room ${roomId} created by ${socket.id.slice(0, 8)}`);
   });
 
   // Join room
   socket.on('join_room', (data) => {
     const roomId = (data.roomId || '').trim().toUpperCase();
-    const room = rooms.get(roomId);
-
-    if (!room) return socket.emit('join_error', { message: 'Room not found. Check the code and try again.' });
+    const room   = rooms.get(roomId);
+    if (!room)        return socket.emit('join_error', { message: 'Room not found. Check the code and try again.' });
     if (room.isFull()) return socket.emit('join_error', { message: 'Room is full (2/2 players).' });
 
     socket.join(roomId);
     socket.roomId = roomId;
-
     const player = room.addPlayer(socket.id, data);
 
     socket.emit('room_joined', {
-      roomId,
-      player,
-      playerIndex: player.index,
-      gameState: room.gameState,
+      roomId, player,
+      playerIndex:  player.index,
+      gameState:    room.gameState,
       otherPlayers: room.getOthers(socket.id)
     });
-
     socket.to(roomId).emit('player_joined', { player });
 
     if (room.isFull()) {
-      io.to(roomId).emit('room_full', {
-        players: Array.from(room.players.values())
-      });
+      io.to(roomId).emit('room_full', { players: Array.from(room.players.values()) });
     }
-
     console.log(`[J] ${socket.id.slice(0, 8)} joined room ${roomId}`);
   });
 
-  // Player ready toggle
+  // Ready toggle
   socket.on('player_ready', () => {
     if (!socket.roomId) return;
     const room = rooms.get(socket.roomId);
@@ -191,37 +141,33 @@ io.on('connection', (socket) => {
     if (!p) return;
     p.ready = !p.ready;
     io.to(socket.roomId).emit('player_ready_update', { id: socket.id, ready: p.ready });
-
     if (Array.from(room.players.values()).every(pl => pl.ready) && room.players.size === 2) {
       io.to(socket.roomId).emit('all_ready');
     }
   });
 
-  // Position/state update (high frequency)
+  // High-frequency position updates
   socket.on('player_update', (data) => {
     if (!socket.roomId) return;
     const room = rooms.get(socket.roomId);
     if (!room) return;
     const p = room.players.get(socket.id);
     if (!p) return;
-
     Object.assign(p, {
       x: data.x, y: data.y,
       velX: data.velX, velY: data.velY,
-      state: data.state, facing: data.facing,
-      hp: data.hp
+      state: data.state, facing: data.facing, hp: data.hp
     });
     room.lastActivity = Date.now();
-
     socket.to(socket.roomId).emit('player_updated', {
-      id: socket.id, x: data.x, y: data.y,
+      id: socket.id,
+      x: data.x, y: data.y,
       velX: data.velX, velY: data.velY,
-      state: data.state, facing: data.facing,
-      hp: data.hp, anim: data.anim
+      state: data.state, facing: data.facing, hp: data.hp, anim: data.anim
     });
   });
 
-  // Generic game events
+  // Game events
   socket.on('game_event', (event) => {
     if (!socket.roomId) return;
     const room = rooms.get(socket.roomId);
@@ -238,8 +184,7 @@ io.on('connection', (socket) => {
         room.gameState.chapter = (event.chapter || 0) + 1;
         room.gameState.checkpoints = {};
         io.to(socket.roomId).emit('game_event', {
-          type: 'load_chapter',
-          chapter: room.gameState.chapter
+          type: 'load_chapter', chapter: room.gameState.chapter
         });
         break;
 
@@ -253,12 +198,13 @@ io.on('connection', (socket) => {
         io.to(socket.roomId).emit('game_event', event);
         break;
 
-      case 'enemy_killed':
+      case 'enemy_killed': {
         room.gameState.enemyStates[event.enemyId] = 'dead';
-        const p = room.players.get(socket.id);
-        if (p) p.stats.kills++;
+        const pk = room.players.get(socket.id);
+        if (pk) pk.stats.kills++;
         io.to(socket.roomId).emit('game_event', event);
         break;
+      }
 
       case 'puzzle_solved':
         room.gameState.puzzleStates[event.puzzleId] = true;
@@ -278,9 +224,9 @@ io.on('connection', (socket) => {
       }
 
       case 'player_revived': {
-        const target = room.players.get(event.targetId);
+        const target   = room.players.get(event.targetId);
         if (target) { target.hp = 50; target.state = 'idle'; }
-        const reviver = room.players.get(socket.id);
+        const reviver  = room.players.get(socket.id);
         if (reviver) reviver.stats.revives++;
         io.to(socket.roomId).emit('game_event', event);
         break;
@@ -295,7 +241,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Ability use (fire, special)
+  // Ability broadcast
   socket.on('ability_used', (data) => {
     if (!socket.roomId) return;
     socket.to(socket.roomId).emit('ability_used', { id: socket.id, ...data });
@@ -309,24 +255,23 @@ io.on('connection', (socket) => {
     const p = room.players.get(socket.id);
     io.to(socket.roomId).emit('chat', {
       from: p ? p.name : 'Unknown',
-      msg: String(data.msg || '').slice(0, 120),
-      ts: Date.now()
+      msg:  String(data.msg || '').slice(0, 120),
+      ts:   Date.now()
     });
   });
 
-  // Save
+  // Save — store in memory cache (client localStorage is the primary store)
   socket.on('save_game', (data) => {
     const key = data.saveKey || socket.id;
-    saveData[key] = { ...data, savedAt: Date.now() };
-    persistSaves();
-    socket.emit('game_saved', { saveKey: key, savedAt: saveData[key].savedAt });
+    saveCache.set(key, { ...data, savedAt: Date.now() });
+    socket.emit('game_saved', { saveKey: key, savedAt: saveCache.get(key).savedAt });
   });
 
-  // Load
+  // Load from memory cache
   socket.on('load_game', (data) => {
-    const save = saveData[data.saveKey];
+    const save = saveCache.get(data.saveKey);
     if (save) socket.emit('game_loaded', save);
-    else socket.emit('load_error', { message: 'No save found for that key.' });
+    else      socket.emit('load_error', { message: 'No server-side save found. Use your local save.' });
   });
 
   // Disconnect
@@ -344,7 +289,7 @@ io.on('connection', (socket) => {
   });
 });
 
-// ── REST API ──────────────────────────────────────────────────────────────────
+// ── REST API ─────────────────────────────────────────────────────────────────
 app.get('/api/rooms', (_, res) => {
   const list = Array.from(rooms.values())
     .filter(r => !r.isFull() && !r.gameState.started)
@@ -352,7 +297,9 @@ app.get('/api/rooms', (_, res) => {
   res.json(list);
 });
 
-app.get('/api/health', (_, res) => res.json({ status: 'ok', rooms: rooms.size }));
+app.get('/api/health', (_, res) =>
+  res.json({ status: 'ok', rooms: rooms.size, uptime: Math.floor(process.uptime()) })
+);
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
