@@ -4,21 +4,24 @@ class BaseGameScene extends Phaser.Scene {
 
   // Called by subclasses after physics world is ready
   _initGame(levelData) {
-    this._ld       = levelData;
-    this._dead     = false;
-    this._paused   = false;
-    this._bullets  = null;
-    this._eBullets = null;
-    this._enemies  = [];
+    this._ld            = levelData;
+    this._dead          = false;
+    this._paused        = false;
+    this._tutorialActive= false;
+    this._bullets       = null;
+    this._eBullets      = null;
+    this._enemies       = [];
     this._interactables = [];
-    this._netOffs  = [];
+    this._netOffs       = [];
     this._remotePlayers = new Map();
-    this._shootCd  = 0;
-    this._abilityCd = 0;
-    this._lastNetSend = 0;
-    this._keys     = null;
-    this._spawnPosX = levelData.spawnX || 200;
-    this._spawnPosY = levelData.spawnY || 400;
+    this._shootCd       = 0;
+    this._abilityCd     = 0;
+    this._lastNetSend   = 0;
+    this._keys          = null;
+    this._spawnPosX     = levelData.spawnX || 200;
+    this._spawnPosY     = levelData.spawnY || 400;
+    // Contextual hint tracking — each shows once per session
+    this._hints = { moved:false, shot:false, interacted:false, ability:false, nearEnemy:false, revive:false };
 
     // World bounds
     this.physics.world.setBounds(0, 0, levelData.width, levelData.height);
@@ -630,17 +633,229 @@ class BaseGameScene extends Phaser.Scene {
 
   _togglePause() {
     this._paused = !this._paused;
-    if(this._paused){
+    if (this._paused) {
       this.physics.pause();
-      const overlay = this.add.rectangle(GW/2,GH/2,GW,GH,0x000000,0.6).setScrollFactor(0).setDepth(50);
-      const pt = this.add.text(GW/2,GH/2,'PAUSED',{fontSize:'48px',fontFamily:'Arial Black',color:'#00eeff'}).setOrigin(0.5).setScrollFactor(0).setDepth(51);
-      const hint = this.add.text(GW/2,GH/2+60,'Press ESC to continue',{fontSize:'18px',fontFamily:'Arial',color:'#556677'}).setOrigin(0.5).setScrollFactor(0).setDepth(51);
-      this._pauseObjs = [overlay,pt,hint];
+      const overlay = this.add.rectangle(GW/2,GH/2,GW,GH,0x000000,0.75).setScrollFactor(0).setDepth(50);
+      const pt   = this.add.text(GW/2,GH/2-100,'PAUSED',{fontSize:'52px',fontFamily:'Arial Black',color:'#00eeff',shadow:{blur:20,color:'#00eeff',fill:true}}).setOrigin(0.5).setScrollFactor(0).setDepth(51);
+      const sep  = this.add.rectangle(GW/2,GH/2-40,500,1,0x224466,1).setScrollFactor(0).setDepth(51);
+      const ctrl = this.add.text(GW/2,GH/2+30,
+        'WASD / Arrows  =  Move            CLICK / SPACE  =  Shoot\n[Q]  =  Special Ability            [E]  =  Interact\n[R]  =  Revive Ally                ESC  =  Resume',
+        {fontSize:'15px',fontFamily:'Arial',color:'#aaccdd',align:'center',lineSpacing:10}
+      ).setOrigin(0.5).setScrollFactor(0).setDepth(51);
+      const hint = this.add.text(GW/2,GH/2+160,'Press  ESC  to continue',{fontSize:'16px',fontFamily:'Arial',color:'#556677'}).setOrigin(0.5).setScrollFactor(0).setDepth(51);
+      this._pauseObjs = [overlay,pt,sep,ctrl,hint];
     } else {
       this.physics.resume();
-      (this._pauseObjs||[]).forEach(o=>o.destroy());
-      this._pauseObjs=[];
+      (this._pauseObjs||[]).forEach(o => o.destroy());
+      this._pauseObjs = [];
     }
+  }
+
+  // ── Tutorial overlay shown at start of every chapter ─────────────────────
+  _showTutorialOverlay(chapterNum, objectives, onDismiss) {
+    this._tutorialActive = true;
+    this.physics.pause();
+
+    const char = GS.playerIndex === 0 ? 'nova' : 'rook';
+    const charName  = char === 'nova' ? 'NOVA' : 'ROOK';
+    const charColor = char === 'nova' ? '#00eeff' : '#ff8800';
+    const abilityDesc = char === 'nova'
+      ? '[Q]  PULSE SCAN — damages nearby enemies and restores your HP'
+      : '[Q]  GRENADE — throw an explosive that blasts everything nearby';
+
+    const obs = [];
+    const sf = (o) => { obs.push(o); return o; };
+
+    sf(this.add.rectangle(GW/2, GH/2, GW, GH, 0x000000, 0.85).setScrollFactor(0).setDepth(200));
+    sf(this.add.rectangle(GW/2, GH/2, 900, 560, 0x000d1a, 0.98).setScrollFactor(0).setDepth(201));
+    sf(this.add.rectangle(GW/2, GH/2, 898, 558, 0, 0).setStrokeStyle(2, 0x00aaff).setScrollFactor(0).setDepth(201));
+
+    // Header
+    sf(this.add.text(GW/2, GH/2 - 256,
+      `CHAPTER ${chapterNum}  —  MISSION BRIEFING`,
+      { fontSize:'20px', fontFamily:'Arial Black', color:charColor,
+        shadow:{ blur:14, color:charColor, fill:true } }
+    ).setOrigin(0.5).setScrollFactor(0).setDepth(202));
+
+    sf(this.add.text(GW/2, GH/2 - 226,
+      `You are ${charName}`,
+      { fontSize:'14px', fontFamily:'Arial', color:charColor }
+    ).setOrigin(0.5).setScrollFactor(0).setDepth(202));
+
+    // Divider line
+    const dg = sf(this.add.graphics().setScrollFactor(0).setDepth(201));
+    dg.lineStyle(1, 0x224466, 1);
+    dg.moveTo(GW/2 - 420, GH/2 - 208); dg.lineTo(GW/2 + 420, GH/2 - 208); dg.strokePath();
+
+    // Controls grid — 3 columns
+    const colData = [
+      { title:'📍  MOVEMENT', x: GW/2 - 295, rows:[
+        { key:'WASD', desc:'Move up / left / down / right' },
+        { key:'Arrow Keys', desc:'Also move your character' }
+      ]},
+      { title:'🎯  COMBAT', x: GW/2, rows:[
+        { key:'CLICK / SPACE', desc:'Shoot toward the cursor' },
+        { key:'[Q]  ABILITY', desc: char==='nova'?'Pulse scan (AOE heal + dmg)':'Grenade (heavy explosion)' }
+      ]},
+      { title:'⚡  ACTIONS', x: GW/2 + 295, rows:[
+        { key:'[E]', desc:'Interact with glowing objects' },
+        { key:'[R]', desc:'Revive fallen ally (stand next to them)' },
+        { key:'ESC', desc:'Pause game' }
+      ]}
+    ];
+
+    colData.forEach(col => {
+      sf(this.add.text(col.x, GH/2 - 186, col.title,
+        { fontSize:'15px', fontFamily:'Arial Black', color:'#ffdd00' }
+      ).setOrigin(0.5).setScrollFactor(0).setDepth(202));
+
+      col.rows.forEach((row, i) => {
+        const ry = GH/2 - 154 + i * 40;
+        sf(this.add.text(col.x - 10, ry, row.key,
+          { fontSize:'13px', fontFamily:'Arial Black', color:'#ffffff',
+            backgroundColor:'#001830', padding:{ x:6, y:3 } }
+        ).setOrigin(1, 0.5).setScrollFactor(0).setDepth(202));
+        sf(this.add.text(col.x + 4, ry, row.desc,
+          { fontSize:'12px', fontFamily:'Arial', color:'#aaccdd', wordWrap:{ width:200 } }
+        ).setOrigin(0, 0.5).setScrollFactor(0).setDepth(202));
+      });
+    });
+
+    // Ability row
+    const dg2 = sf(this.add.graphics().setScrollFactor(0).setDepth(201));
+    dg2.lineStyle(1, 0x224466, 1);
+    dg2.moveTo(GW/2 - 420, GH/2 - 58); dg2.lineTo(GW/2 + 420, GH/2 - 58); dg2.strokePath();
+
+    sf(this.add.text(GW/2, GH/2 - 38, `YOUR SPECIAL ABILITY:   ${abilityDesc}`,
+      { fontSize:'14px', fontFamily:'Arial', color:'#88ffaa' }
+    ).setOrigin(0.5).setScrollFactor(0).setDepth(202));
+
+    // Objective list
+    const dg3 = sf(this.add.graphics().setScrollFactor(0).setDepth(201));
+    dg3.lineStyle(1, 0x224466, 1);
+    dg3.moveTo(GW/2 - 420, GH/2 - 12); dg3.lineTo(GW/2 + 420, GH/2 - 12); dg3.strokePath();
+
+    sf(this.add.text(GW/2 - 418, GH/2 + 8, 'OBJECTIVES:',
+      { fontSize:'14px', fontFamily:'Arial Black', color:'#ffdd00' }
+    ).setOrigin(0, 0.5).setScrollFactor(0).setDepth(202));
+
+    objectives.forEach((obj, i) => {
+      sf(this.add.text(GW/2 - 418, GH/2 + 34 + i * 26, `  ►  ${obj}`,
+        { fontSize:'13px', fontFamily:'Arial', color:'#aaddcc' }
+      ).setOrigin(0, 0.5).setScrollFactor(0).setDepth(202));
+    });
+
+    // Tip bar
+    const dg4 = sf(this.add.graphics().setScrollFactor(0).setDepth(201));
+    dg4.lineStyle(1, 0x224466, 1);
+    dg4.moveTo(GW/2 - 420, GH/2 + 148); dg4.lineTo(GW/2 + 420, GH/2 + 148); dg4.strokePath();
+
+    sf(this.add.text(GW/2, GH/2 + 164,
+      '💡  Tip: Move RIGHT to explore the level. Yellow labels appear near anything you can interact with.',
+      { fontSize:'12px', fontFamily:'Arial', color:'#556677', align:'center', wordWrap:{ width:800 } }
+    ).setOrigin(0.5).setScrollFactor(0).setDepth(202));
+
+    // Dismiss button
+    const btnY = GH/2 + 228;
+    const btn = sf(this.add.rectangle(GW/2, btnY, 320, 50, 0x004488, 0.95).setScrollFactor(0).setDepth(202).setInteractive({ cursor:'pointer' }));
+    sf(this.add.rectangle(GW/2, btnY, 318, 48, 0, 0).setStrokeStyle(1, 0x0088ff).setScrollFactor(0).setDepth(202));
+    const btxt = sf(this.add.text(GW/2, btnY, '▶   I UNDERSTAND — START MISSION',
+      { fontSize:'16px', fontFamily:'Arial Black', color:'#00eeff' }
+    ).setOrigin(0.5).setScrollFactor(0).setDepth(203));
+
+    btn.on('pointerover', () => { btn.setFillStyle(0x0066bb, 0.95); btxt.setStyle({ color:'#ffffff' }); });
+    btn.on('pointerout',  () => { btn.setFillStyle(0x004488, 0.95); btxt.setStyle({ color:'#00eeff' }); });
+
+    const dismiss = () => {
+      obs.forEach(o => { try { o.destroy(); } catch(_) {} });
+      this._tutorialActive = false;
+      this.physics.resume();
+      if (onDismiss) onDismiss();
+    };
+
+    btn.on('pointerdown', () => { SFX.ui(); dismiss(); });
+    this.input.keyboard.once('keydown-ENTER', dismiss);
+    this.input.keyboard.once('keydown-SPACE', dismiss);
+
+    // Pulse the button to draw attention
+    this.tweens.add({ targets:[btn, btxt], alpha:{ from:0.7, to:1 }, duration:700, yoyo:true, repeat:-1 });
+  }
+
+  // ── Contextual hints — shown once each, during gameplay ───────────────────
+  _checkContextualHints() {
+    if (!this._hints) return;
+    const p = this._player;
+    const k = this._keys;
+
+    // Hint 1: prompt to move if player hasn't moved yet after 3 seconds
+    if (!this._hints.moved) {
+      if (!this._hintMoveTimer) this._hintMoveTimer = this.time.now + 3000;
+      if (this.time.now > this._hintMoveTimer) {
+        this._hints.moved = true;
+        this._showHint('Use  WASD  or  Arrow Keys  to move!', 4000);
+      }
+      if (p.body.velocity.x !== 0 || p.body.velocity.y !== 0) {
+        this._hints.moved = true;
+      }
+    }
+
+    // Hint 2: show shoot hint when first enemy comes into view (within 400px)
+    if (!this._hints.shot) {
+      const nearby = this._enemies.find(e => !e.dead && Phaser.Math.Distance.Between(p.x, p.y, e.x, e.y) < 400);
+      if (nearby) {
+        this._hints.shot = true;
+        this._showHint('Enemy spotted!  Click  or  SPACE  to shoot  ·  Aim with your mouse', 4500);
+      }
+    }
+
+    // Hint 3: ability reminder — 20 seconds in
+    if (!this._hints.ability) {
+      if (!this._hintAbilityTimer) this._hintAbilityTimer = this.time.now + 20000;
+      if (this.time.now > this._hintAbilityTimer) {
+        this._hints.ability = true;
+        const ab = GS.playerIndex === 0 ? 'PULSE SCAN' : 'GRENADE';
+        this._showHint(`Press  [Q]  to use your  ${ab}  ability!`, 4000);
+      }
+    }
+
+    // Hint 4: interact reminder when player hasn't interacted and is near an object
+    if (!this._hints.interacted) {
+      const nearObj = this._interactables.find(o => !o.activated &&
+        Phaser.Math.Distance.Between(p.x, p.y, o.x, o.y) < 80);
+      if (nearObj) {
+        this._hints.interacted = true;
+        this._showHint('You\'re near something!  Press  [E]  to interact', 3500);
+      }
+    }
+
+    // Hint 5: revive reminder when partner is down
+    if (!this._hints.revive && GS.roomId) {
+      for (const [, rp] of this._remotePlayers) {
+        if (rp.hp <= 0 && rp.sprite &&
+            Phaser.Math.Distance.Between(p.x, p.y, rp.sprite.x, rp.sprite.y) < 200) {
+          this._hints.revive = true;
+          this._showHint('Your partner is DOWN!  Walk up to them and press  [R]  to revive!', 5000);
+        }
+      }
+    }
+  }
+
+  _showHint(message, duration) {
+    // Remove any active hint
+    if (this._activeHint) { try { this._activeHint.forEach(o => o.destroy()); } catch(_){} }
+    const bg = this.add.rectangle(GW/2, 60, GW - 100, 44, 0x000d1a, 0.92).setScrollFactor(0).setDepth(90);
+    this.add.rectangle(GW/2, 60, GW - 102, 42, 0, 0).setStrokeStyle(1, 0x0088aa).setScrollFactor(0).setDepth(90);
+    const txt = this.add.text(GW/2, 60, `  💬  ${message}  `,
+      { fontSize:'14px', fontFamily:'Arial', color:'#ffffff', align:'center' }
+    ).setOrigin(0.5).setScrollFactor(0).setDepth(91);
+    this._activeHint = [bg, txt];
+    this.tweens.add({ targets:[bg, txt], alpha:{ from:0, to:1 }, duration:300 });
+    this.time.delayedCall(duration, () => {
+      this.tweens.add({ targets:[bg, txt], alpha:0, duration:500, onComplete:() => {
+        bg.destroy(); txt.destroy();
+        if (this._activeHint) this._activeHint = null;
+      }});
+    });
   }
 
   _cleanupAndGo(chapterIdx) {
@@ -665,8 +880,7 @@ class BaseGameScene extends Phaser.Scene {
   _goNextCutscene() {} // override per chapter
 
   update(time, delta) {
-    if(this._paused || this._dead) {
-      // still update remote interpolation
+    if (this._paused || this._tutorialActive || this._dead) {
       this._updateRemotes(delta);
       return;
     }
@@ -676,6 +890,7 @@ class BaseGameScene extends Phaser.Scene {
     this._updateRemotes(delta);
     this._updateEnemies(delta);
     this._checkPickupProximity();
+    this._checkContextualHints();
     this._sendNetUpdate(time);
   }
 
@@ -698,10 +913,8 @@ class BaseGameScene extends Phaser.Scene {
     else if(vx>0) { this._player.setFlipX(false); this._player.facing='right'; }
 
     const anim = moving ? this._player.char+'_walk' : this._player.char+'_idle';
-    if(this._player.anims.currentAnim?.key !== anim && !this._player.anims.isPlaying) {
+    if (this._player.anims.currentAnim?.key !== anim) {
       this._player.play(anim, true);
-    } else if(!this._player.anims.isPlaying) {
-      this._player.play(anim);
     }
   }
 
@@ -786,15 +999,26 @@ class BaseGameScene extends Phaser.Scene {
   }
 
   _checkPickupProximity() {
-    // Show prompt for nearby interactables
-    for(const obj of this._interactables){
-      if(!obj.activated){
-        const d = Phaser.Math.Distance.Between(this._player.x,this._player.y,obj.x,obj.y);
-        if(!obj._prompt){
-          obj._prompt = this.add.text(obj.x,obj.y-32,'[E]',{fontSize:'13px',fontFamily:'Arial',color:'#ffff00'}).setOrigin(0.5).setDepth(20);
+    for (const obj of this._interactables) {
+      if (!obj.activated) {
+        const d = Phaser.Math.Distance.Between(this._player.x, this._player.y, obj.x, obj.y);
+        if (!obj._prompt) {
+          const data = obj.interactData || {};
+          const typeLabel = data.label || (data.type === 'healthpack' ? 'Health Pack' :
+            data.type === 'crystal' ? 'Vaelari Crystal' :
+            data.type === 'journal' ? 'Mission Log' :
+            data.type === 'plate'   ? 'Power Switch' :
+            data.type === 'beacon'  ? 'Launch Beacon' : 'Terminal');
+          obj._prompt = this.add.text(obj.x, obj.y - 40,
+            `[E]  ${typeLabel}`,
+            { fontSize:'13px', fontFamily:'Arial Black', color:'#ffff00',
+              stroke:'#000000', strokeThickness:3 }
+          ).setOrigin(0.5).setDepth(20);
+          // Gentle bob
+          this.tweens.add({ targets:obj._prompt, y:'-=4', duration:500, yoyo:true, repeat:-1, ease:'Sine.easeInOut' });
         }
-        obj._prompt.setVisible(d<70);
-      } else if(obj._prompt){
+        obj._prompt.setVisible(d < 80);
+      } else if (obj._prompt) {
         obj._prompt.setVisible(false);
       }
     }
@@ -869,14 +1093,22 @@ class Chapter1 extends BaseGameScene {
       ]
     };
 
-    this.physics.world.gravity.y = 0; // top-down, no gravity
+    this.physics.world.gravity.y = 0;
     this._initGame(ld);
-    this._showChapterIntro();
-  }
 
-  _showChapterIntro() {
-    this.time.delayedCall(600, ()=>{
-      this._showDialogBubble('NOVA: "ROOK! The ship\'s reactor is critical — we have minutes!\nFind the emergency beacon and get to the launch pad!"', 5000);
+    this._showTutorialOverlay('I', [
+      'Find and activate the Emergency Beacon  (glowing terminal near spawn)',
+      'Fight through enemies heading EAST toward the launch pad',
+      'Destroy the Automated Defense Turret blocking the exit',
+      'Activate the Launch Pad Beacon to escape — CHAPTER COMPLETE'
+    ], () => {
+      // Show story dialog after player dismisses tutorial
+      this.time.delayedCall(400, () => {
+        this._showDialogBubble(
+          'NOVA: "ROOK! Reactor critical — minutes to detonation!\nBeacon is just ahead. Activate it, then reach the launch pad!"',
+          5500
+        );
+      });
     });
   }
 
@@ -986,15 +1218,25 @@ class Chapter2 extends BaseGameScene {
 
     this.physics.world.gravity.y = 0;
     this._initGame(ld);
-    this._showChapterIntro();
-  }
 
-  _showChapterIntro() {
-    this.time.delayedCall(600, ()=>{
-      this._showDialogBubble('NOVA: "These ruins predate any known civilization.\nFind the power grid — we need to get the systems online."', 5000);
-    });
-    this.time.delayedCall(6000, ()=>{
-      this._showDialogBubble('ROOK: "Two pressure plates ahead. We\'ll need both of us to activate them simultaneously."', 4500);
+    this._showTutorialOverlay('II', [
+      'Activate BOTH Power Switches  (two pressure plates — each player stands on one)',
+      'Once power is on, interact with the Ancient Interface at the far east end',
+      'Defeat the Void Sentinel boss guarding the terminal',
+      'Speak with ECHO to complete the chapter'
+    ], () => {
+      this.time.delayedCall(400, () => {
+        this._showDialogBubble(
+          'NOVA: "Ancient ruins — nothing like these in any record.\nFind the power grid and get the systems back online."',
+          5000
+        );
+        this.time.delayedCall(5800, () => {
+          this._showDialogBubble(
+            'ROOK: "I see two pressure plates ahead. We\'ll each need to stand on one — simultaneously."',
+            4500
+          );
+        });
+      });
     });
   }
 
@@ -1141,15 +1383,25 @@ class Chapter3 extends BaseGameScene {
 
     this.physics.world.gravity.y = 0;
     this._initGame(ld);
-    this._showChapterIntro();
-  }
 
-  _showChapterIntro() {
-    this.time.delayedCall(600, ()=>{
-      this._showDialogBubble('ECHO: "This is VOID\'s heart. Be careful — the deeper we go, the stronger the defenses."', 5000);
-    });
-    this.time.delayedCall(6000, ()=>{
-      this._showDialogBubble('ROOK: "Stay sharp. Whatever VOID throws at us, we\'ve come too far to stop now."', 4000);
+    this._showTutorialOverlay('III', [
+      'Fight through VOID\'s facility heading EAST — enemies are tougher here',
+      'Defeat all guards and reach the VOID Core Interface at the far end',
+      'Defeat the VOID AVATAR boss  (3 phases — it gets faster as HP drops)',
+      'Interact with the Core Interface to trigger the final story choice'
+    ], () => {
+      this.time.delayedCall(400, () => {
+        this._showDialogBubble(
+          'ECHO: "This is VOID\'s heart. The deeper we go, the stronger its defenses."',
+          5000
+        );
+        this.time.delayedCall(5800, () => {
+          this._showDialogBubble(
+            'ROOK: "Stay sharp. Whatever it throws at us — we\'ve come too far to stop now."',
+            4000
+          );
+        });
+      });
     });
   }
 
@@ -1373,13 +1625,13 @@ class UIScene extends Phaser.Scene {
     this._chatInput = null;
     this._buildChat();
 
-    // Objectives per chapter
+    // Live objective line (updated by game scene)
     const objectives = {
-      Chapter1:'Activate beacon → Defeat turret → Reach launch pad',
-      Chapter2:'Activate power switches → Meet ECHO → Defeat Sentinel',
-      Chapter3:'Fight through to VOID Core → Defeat VOID Avatar → Choose fate'
+      Chapter1:'① Beacon  ② Defeat Turret  ③ Launch Pad',
+      Chapter2:'① Power Switches  ② Void Sentinel  ③ ECHO Terminal',
+      Chapter3:'① Clear Path  ② Defeat VOID Avatar  ③ Core Interface'
     };
-    this._objTxt.setText(objectives[this._gameSceneKey]||'');
+    this._objTxt.setText('OBJECTIVE:  ' + (objectives[this._gameSceneKey] || ''));
   }
 
   _buildChat() {
@@ -1488,9 +1740,20 @@ const config = {
   height: GH,
   backgroundColor: '#000000',
   parent: 'game-container',
+  // Render at native device resolution — sharp on retina / 4K screens
+  resolution: Math.min(window.devicePixelRatio || 1, 2),
   scale: {
     mode: Phaser.Scale.FIT,
-    autoCenter: Phaser.Scale.CENTER_BOTH
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+    width: GW,
+    height: GH
+  },
+  render: {
+    antialias: true,
+    antialiasGL: true,
+    pixelArt: false,
+    roundPixels: false,
+    mipmapFilter: 'LINEAR_MIPMAP_LINEAR'
   },
   physics: {
     default: 'arcade',
